@@ -30,14 +30,18 @@ def compute_tok_score_cart(doc_reps, doc_input_ids, qry_reps, qry_input_ids, qry
     scores_no_masking = scores_no_masking.view(
         *qry_reps.shape[:2], *doc_reps.shape[:2])  # Q * LQ * D * LD
     scores, _ = (scores_no_masking * exact_match).max(dim=3)  # Q * LQ * D
-    tok_scores = (scores * qry_attention_mask.reshape(-1, qry_attention_mask.shape[-1]).unsqueeze(2))[:, 1:].sum(1)
-    
-    return tok_scores
+    return (
+        scores
+        * qry_attention_mask.reshape(
+            -1, qry_attention_mask.shape[-1]
+        ).unsqueeze(2)
+    )[:, 1:].sum(1)
 
 def semsup_forward(input_embeddings, label_embeddings, num_candidates = -1, list_to_set_mapping = None, same_labels = False):
     print(input_embeddings.shape, label_embeddings.shape)
-    logits = torch.bmm(input_embeddings.unsqueeze(1), label_embeddings.transpose(2,1)).squeeze(1)
-    return logits
+    return torch.bmm(
+        input_embeddings.unsqueeze(1), label_embeddings.transpose(2, 1)
+    ).squeeze(1)
 
 import torch
 from typing import Optional
@@ -79,7 +83,7 @@ def get_prediction_results(preds, label_ids):
         for val in top_values:
             tops[val] += len([x for x in indexes[:val] if label[x]!=0])
     precisions_at_k =  {k:v/((i+1)*k) for k,v in tops.items()}
-    print('Evaluation Result: precision@{} = {}'.format(top_values, precisions_at_k))
+    print(f'Evaluation Result: precision@{top_values} = {precisions_at_k}')
     return precisions_at_k
 
 import json
@@ -152,7 +156,7 @@ def get_recall_results(preds, label_ids):
             except:
                 ...
     recall_at_k =  {k:v/(i+1) for k,v in tops.items()}
-    print('Evaluation Result: recall@{} = {}'.format(top_values, recall_at_k))
+    print(f'Evaluation Result: recall@{top_values} = {recall_at_k}')
     return recall_at_k
 
 get_recall_results(final_logits, final_labels)

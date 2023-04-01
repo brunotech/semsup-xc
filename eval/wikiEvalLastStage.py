@@ -58,7 +58,7 @@ coil_cluster_map = {int(k):int(v) for k,v in coil_cluster_map.items()}
 
 def setup_config(model_args, data_args, num_labels):
     config = AutoConfig.from_pretrained(
-        model_args.config_name if model_args.config_name else model_args.model_name_or_path,
+        model_args.config_name or model_args.model_name_or_path,
         num_labels=num_labels,
         finetuning_task=data_args.task_name,
     )
@@ -85,7 +85,7 @@ def main():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, CustomTrainingArguments))
     model_args, data_args, training_args = parser.parse_dict(read_yaml_config(os.path.abspath(sys.argv[1]), output_dir='tmp'))
 
-    isGZSL = sys.argv[2] == 'True' or sys.argv[2] == 'true'
+    isGZSL = sys.argv[2] in ['True', 'true']
 
     data_files = {
         'test':  'datasets/Wiki1M/test.jsonl' if isGZSL else 'datasets/Wiki1M/test_unseen.jsonl',
@@ -111,7 +111,7 @@ def main():
 
     temp_label_id = {v: i for i, v in enumerate(label_list)}
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+        model_args.tokenizer_name or model_args.model_name_or_path,
         use_fast=True,
     )
 
@@ -152,16 +152,20 @@ def main():
     raw_datasets = raw_datasets.with_transform(
         preprocess_function,
     )
-    if model_args.semsup and data_args.large_dset and os.path.exists(data_args.tokenized_descs_file):
-        if data_args.tokenized_descs_file.endswith('npy'):
-            class_descs_tokenized = np.load(data_args.tokenized_descs_file, allow_pickle=True)
+    if (
+        model_args.semsup
+        and data_args.large_dset
+        and os.path.exists(data_args.tokenized_descs_file)
+        and data_args.tokenized_descs_file.endswith('npy')
+    ):
+        class_descs_tokenized = np.load(data_args.tokenized_descs_file, allow_pickle=True)
     print('Descs Load Completed')
 
     seen_labels = []
     UNSEEN_LABELS_FILE = 'datasets/Wiki1M/unseen_labels.txt'
 
     if UNSEEN_LABELS_FILE is not None:
-        for line in open(UNSEEN_LABELS_FILE).readlines():
+        for line in open(UNSEEN_LABELS_FILE):
             seen_labels.append(line.strip())
     else:
         seen_labels = None
@@ -279,7 +283,7 @@ def main():
                 BS = item['input_ids'].shape[0]
                 # if ii > 100:
                 #     break
-                batch_item = dict()
+                batch_item = {}
                 item['input_ids'] = item['input_ids'].apply_(coil_cluster_map.get)
                 batch_item['input_ids'] = item['input_ids'].cuda()
                 batch_item['attention_mask'] = item['attention_mask'].cuda()

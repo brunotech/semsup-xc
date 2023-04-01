@@ -67,9 +67,9 @@ class AutoModelForMultiLabelClassification:
             if type(kwargs['config']) == MODEL_TO_CONFIG[key]:
                 class_name = getattr(sys.modules[__name__], MODEL_FOR_SEMANTIC_EMBEDDING[key])
                 return class_name.from_pretrained(*args, **kwargs)
-        
+
         # If none of the models were chosen
-        raise("This model type is not supported. Please choose one of {}".format(MODEL_FOR_SEMANTIC_EMBEDDING.keys()))
+        raise f"This model type is not supported. Please choose one of {MODEL_FOR_SEMANTIC_EMBEDDING.keys()}"
 
 from transformers import BertForSequenceClassification, BertTokenizer
 from transformers import RobertaForSequenceClassification, RobertaTokenizer
@@ -93,7 +93,7 @@ class BertForSemanticEmbedding(nn.Module):
             self.arch_type = config.arch_type  
         except:
             self.arch_type = 2
-        
+
 
         try:
             self.colbert = config.colbert
@@ -120,7 +120,7 @@ class BertForSemanticEmbedding(nn.Module):
 
 
         print('Config is', config)
-        
+
         if config.negative_sampling == 'none':
             if config.arch_type == 1:
                 self.fc1 = nn.Linear(5 * config.hidden_size, 512 if config.semsup else config.num_labels)
@@ -134,7 +134,7 @@ class BertForSemanticEmbedding(nn.Module):
         self.dropout = nn.Dropout(0.1)
         self.candidates_topk = 10
         if config.negative_sampling != 'none':
-            self.group_y = np.array([np.array([l for l in group]) for group in config.group_y])
+            self.group_y = np.array([np.array(list(group)) for group in config.group_y])
         #np.load('datasets/EUR-Lex/label_group_lightxml_0.npy', allow_pickle=True)
 
         self.negative_sampling = config.negative_sampling
@@ -169,8 +169,12 @@ class BertForSemanticEmbedding(nn.Module):
             scores, _ =  scores_no_masking.max(dim=3) 
         else:
             scores, _ = (scores_no_masking * exact_match).max(dim=3)  # Q * LQ * D
-        tok_scores = (scores * qry_attention_mask.reshape(-1, qry_attention_mask.shape[-1]).unsqueeze(2))[:, 1:].sum(1)
-        return tok_scores
+        return (
+            scores
+            * qry_attention_mask.reshape(
+                -1, qry_attention_mask.shape[-1]
+            ).unsqueeze(2)
+        )[:, 1:].sum(1)
 
     def coil_eval_forward(
         self,
@@ -276,24 +280,30 @@ class BertForSemanticEmbedding(nn.Module):
             If same_labels = True, directly apply matrix multiplication
             else: num_candidates must not be -1, list_to_set_mapping must not be None
         '''
-        if same_labels:
-            logits = torch.bmm(input_embeddings.unsqueeze(1), label_embeddings.transpose(2,1)).squeeze(1)
-        else:
-            # TODO: Can we optimize this? Perhaps torch.bmm?
-            logits = torch.stack(
+        return (
+            torch.bmm(
+                input_embeddings.unsqueeze(1), label_embeddings.transpose(2, 1)
+            ).squeeze(1)
+            if same_labels
+            else torch.stack(
                 # For each batch point, calculate corresponding product with label embeddings
                 [
-                    logit @ label_embeddings[list_to_set_mapping[i*num_candidates: (i+1) * num_candidates]].T for i,logit in enumerate(input_embeddings)   
+                    logit
+                    @ label_embeddings[
+                        list_to_set_mapping[
+                            i * num_candidates : (i + 1) * num_candidates
+                        ]
+                    ].T
+                    for i, logit in enumerate(input_embeddings)
                 ]
             )
-
-        return logits
+        )
 
     def forward_label_embeddings(self, all_candidate_labels, label_desc_ids, desc_input_ids = None, desc_attention_mask = None, desc_inputs_embeds = None, return_hidden_states = False):
         # Given the candidates, and corresponding 
         # description numbers of labels
         # Returns the embeddings for unique label descriptions 
-        
+
         if desc_attention_mask is None:
             num_candidates = all_candidate_labels.shape[1]
             # Create a set to perform minimal number of operations on common labels
@@ -340,20 +350,19 @@ class BertForSemanticEmbedding(nn.Module):
                     attention_mask=desc_attention_mask.reshape(-1, desc_input_ids.shape[-1]).contiguous(),
                 )
             label_embeddings = outputs.pooler_output
-        if self.label_projection is not None:
-            if return_hidden_states:
-                return outputs, label_embeddings @ self.label_projection.weight, list_to_set_mapping, num_candidates
-            else:
-                return label_embeddings @ self.label_projection.weight, list_to_set_mapping, num_candidates
-        else:
+        if self.label_projection is None:
             return label_embeddings, list_to_set_mapping, num_candidates
+        if return_hidden_states:
+            return outputs, label_embeddings @ self.label_projection.weight, list_to_set_mapping, num_candidates
+        else:
+            return label_embeddings @ self.label_projection.weight, list_to_set_mapping, num_candidates
 
     def forward_input_encoder(self, input_ids, attention_mask, token_type_ids, ):
         outputs = self.encoder(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
-            output_hidden_states=True if self.arch_type == 1 else False,
+            output_hidden_states=self.arch_type == 1,
         )
 
         # Currently, method specified in LightXML is used
@@ -361,7 +370,7 @@ class BertForSemanticEmbedding(nn.Module):
             logits = outputs[1]
         elif self.arch_type == 1:
             logits = torch.cat([outputs.hidden_states[-i][:, 0] for i in range(1, 5+1)], dim=-1)
-        
+
         if self.arch_type in [1,3]:
             logits = self.dropout(logits)
 

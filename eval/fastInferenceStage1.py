@@ -58,7 +58,7 @@ DSET_NAME = sys.argv[6] # Wiki1M or Amzn13K
 
 def setup_config(model_args, data_args, num_labels):
     config = AutoConfig.from_pretrained(
-        model_args.config_name if model_args.config_name else model_args.model_name_or_path,
+        model_args.config_name or model_args.model_name_or_path,
         num_labels=num_labels,
         finetuning_task=data_args.task_name,
     )
@@ -73,7 +73,7 @@ def setup_config(model_args, data_args, num_labels):
         config.label_hidden_size = 512
     config.label_names = 'labels'
     # TODO: Take from config
-    config.cluster_labels_dim = 64 
+    config.cluster_labels_dim = 64
     config.encoder_model_type = model_args.encoder_model_type
     config.arch_type = model_args.arch_type
     config.devise = model_args.devise
@@ -85,7 +85,7 @@ def main():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, CustomTrainingArguments))
     model_args, data_args, training_args = parser.parse_dict(read_yaml_config(os.path.abspath(sys.argv[1]), output_dir='tmp'))
 
-    isGZSL = sys.argv[2] == 'True' or sys.argv[2] == 'true'
+    isGZSL = sys.argv[2] in ['True', 'true']
 
     data_files = {
         'test':  f'datasets/{DSET_NAME}/test.jsonl' if isGZSL else f'datasets/{DSET_NAME}/test_unseen_split6500_2.jsonl' if DSET_NAME == 'Amzn13K' else 'test_unseen.jsonl',
@@ -100,7 +100,7 @@ def main():
     if DSET_NAME == 'Amzn13K':
         label_key = task_to_label_keys['amazon13k'] 
     else:
-        label_key = task_to_label_keys['wiki1m'] 
+        label_key = task_to_label_keys['wiki1m']
     label_list = [x.strip() for x in open(f'datasets/{DSET_NAME}/all_labels.txt')]
     num_labels = len(label_list)
     label_list.sort() # For consistency
@@ -110,7 +110,7 @@ def main():
 
     temp_label_id = {v: i for i, v in enumerate(label_list)}
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
+        model_args.tokenizer_name or model_args.model_name_or_path,
         use_fast=True,
     )
 
@@ -124,7 +124,7 @@ def main():
             model.tokenizedDescriptions = tokenizedDescriptions
         model.label_model = label_model
         model.label_tokenizer = label_tokenizer
-    
+
     if data_args.task_name is not None:
         sentence1_key, sentence2_key = task_to_keys[data_args.task_name]
 
@@ -151,7 +151,7 @@ def main():
             else:
                 result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
 
-        
+
         try: del input['labels']
         except: ...
 
@@ -160,16 +160,20 @@ def main():
     raw_datasets = raw_datasets.with_transform(
         preprocess_function,
     )
-    if model_args.semsup and data_args.large_dset and os.path.exists(data_args.tokenized_descs_file):
-        if data_args.tokenized_descs_file.endswith('npy'):
-            class_descs_tokenized = np.load(data_args.tokenized_descs_file, allow_pickle=True)
+    if (
+        model_args.semsup
+        and data_args.large_dset
+        and os.path.exists(data_args.tokenized_descs_file)
+        and data_args.tokenized_descs_file.endswith('npy')
+    ):
+        class_descs_tokenized = np.load(data_args.tokenized_descs_file, allow_pickle=True)
     print('Descs Load Completed')
 
     seen_labels = []
     UNSEEN_LABELS_FILE = f'datasets/{DSET_NAME}/unseen_labels_split6500_2.txt' if DSET_NAME == 'Amzn13K' else f'datasets/{DSET_NAME}/unseen_labels.txt'
 
     if UNSEEN_LABELS_FILE is not None:
-        for line in open(UNSEEN_LABELS_FILE).readlines():
+        for line in open(UNSEEN_LABELS_FILE):
             seen_labels.append(line.strip())
     else:
         seen_labels = None
@@ -182,7 +186,7 @@ def main():
             raw_datasets['test'] = SemSupDataset(raw_datasets['test'], data_args, data_args.label_description_file,
             label_to_id, id2label, label_tokenizer, return_desc_embeddings = True,
             seen_labels = seen_labels, add_label_name = data_args.add_label_name)
-        
+
 
     data_collator = default_data_collator
     torch.cuda.empty_cache()
@@ -198,7 +202,7 @@ def main():
     )
 
 
-    OUT_DIR = sys.argv[3]         
+    OUT_DIR = sys.argv[3]
     model.load_state_dict(torch.load(f'{OUT_DIR}/pytorch_model.bin'))
     model.eval()
     testloader = trainer.get_test_dataloader(raw_datasets['test'])
@@ -215,7 +219,7 @@ def main():
             f = h5py.File(sys.argv[5],'w')
             with torch.no_grad():
                 tokenized_descs = testloader.dataset.class_descs_tokenized
-                label_data = dict()
+                label_data = {}
                 for ii, (inp_ids, atm) in tqdm(enumerate(zip(tokenized_descs['input_ids'], tokenized_descs['attention_mask']))):
                     for i in list(np.random.choice(inp_ids.shape[0], 1)): #range(len(tokenized_descs[label][0])):
                         desc_input_ids = torch.from_numpy(np.array(inp_ids[i])).unsqueeze(0).cuda()
@@ -228,7 +232,7 @@ def main():
             print(len(testloader.dataset))
             with torch.no_grad():
                 tokenized_descs = testloader.dataset.class_descs_tokenized
-                label_data = dict()
+                label_data = {}
                 for label in tqdm(tokenized_descs):
                     label_data[label] = []
                     for i in range(len(tokenized_descs[label][0])):
@@ -242,7 +246,7 @@ def main():
 
             # Now lets save the label_data
             pickle.dump(label_data, open(sys.argv[5],'wb'))
-    
+
     if embedInstances:
         dt = raw_datasets['test'].with_transform(preprocess_function)
         testloader = DataLoader(raw_datasets['test'], collate_fn = default_data_collator, batch_size = training_args.per_device_eval_batch_size)
@@ -255,7 +259,7 @@ def main():
             ii = 0
             for item in tqdm(testloader):
                 ii+=1
-                batch_item = dict()
+                batch_item = {}
                 batch_item['input_ids'] = item['input_ids'].cuda()
                 batch_item['attention_mask'] = item['attention_mask'].cuda()
                 batch_item['token_type_ids'] = item['token_type_ids'].cuda()
